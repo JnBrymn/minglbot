@@ -42,7 +42,7 @@ assert u is None
 
 #Test basic hydration
 m._delete_user_from_neo4j("jnbrymn")
-u = m._hydrate_users_from_twitter(screen_names=["jnbrymn"])
+u = m._hydrate_users_from_twitter(["jnbrymn"])
 assert u[0]["name"] == "John Berryman"
 
 
@@ -52,7 +52,7 @@ m._create_user_in_neo4j(28881634) #jnbrymn's id
 m._create_user_in_neo4j("jnbrymn")#there should now be two jnbrymn nodes one with id and one with screen_name
 #hydrate users will reveal that jnbrymn is the same user as 17983820 and resolve the issue
 #by combining nodes including all existing FOLLOWS relationships
-us = m._hydrate_users_from_twitter(screen_names=["jnbrymn","softwaredoug","patriciagorla","kmbrymn"])
+us = m._hydrate_users_from_twitter(["jnbrymn","softwaredoug","patriciagorla","kmbrymn"])
 assert us[0]["name"] == "John Berryman"
 assert us[3]["name"] == "Kumiko Berryman"
 
@@ -73,11 +73,11 @@ neo4j.CypherQuery(m.graph,"""
 neo4j.CypherQuery(m.graph,"""
     CREATE (u:User{id:{user2}})
 """).run(user2=user2)
-us = m.hydrate_users(ids=[user1,user2],screen_names=[user3])
+us = m.hydrate_users([user1,user2,user3])
 try:
     us[0]["name"] == None
 except KeyError:
-    assert "We expect a key error"
+    assert "We expect a key error because the user was marked as hydrated even though it doesn't have a name"
 assert us[1]["name"] == "John Berryman"
 assert us[2]["name"] == "Kumiko Berryman"
 
@@ -111,7 +111,7 @@ m._delete_user_from_neo4j(15547216)
 m._delete_user_from_neo4j(628159493)
 m._delete_user_from_neo4j("jnbrymn")
 m._delete_user_from_neo4j("softwaredoug")
-friends = m.get_mutual_friends(ids=[15547216,628159493],screen_names=["jnbrymn","softwaredoug"],limit=100,min_num_mutual_friends=2)
+friends = m.get_mutual_friends([15547216,628159493,"jnbrymn","softwaredoug"],limit=100,min_num_mutual_friends=2)
 assert len(friends[2]) > 0
 
 
@@ -119,7 +119,7 @@ assert len(friends[2]) > 0
 m._delete_user_from_neo4j("jnbrymn")
 u = minglbot.User("jnbrymn")
 u.hydrated_at = 1 #cheating here by pretending that user is hydrated
-users = m.hydrate_users(screen_names=["jnbrymn"],users=[u])
+users = m.hydrate_users(["jnbrymn",u])
 assert len(users) == 1
 assert users[0].id == None #since he doesn't have an id it proves that we haven't gone to Twitter
 

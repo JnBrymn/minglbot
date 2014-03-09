@@ -1,11 +1,9 @@
 #TODOs
 #make twitter and graph private and make all *_at attributes @properties
-#Make all functions take users of type id, str, list, or User: 
-#  _get_users_from_neo4j, _udelete_sers_from_neo4j, _hydrate_users_from_twitter
-#  get_mutual_friends
 #handle nonexistant (friends and hydration)
 #handle secret users (friends and hydration)
 #change _get_user_from_neo4j to userS (plural)
+#guard against "could not authenticate" code 32
 
 import os
 import logging #see http://docs.python.org/2/howto/logging
@@ -78,6 +76,24 @@ from py2neo import neo4j
 import copy
 
 class MinglBot(object):
+    @classmethod
+    def split_up_input(cls,input,types_map,error_on_unknown_type=True):
+        if not isinstance(input,list):
+            input = [input]
+        d = defaultdict(list)
+        for i in input:
+            for t,n in types_map.iteritems():
+                if isinstance(i,t):
+                    d[n].append(i)
+                    break
+            else:
+                if error_on_unknown_type:
+                    raise Exception("unsupported %s" % type(i))
+                    logger.error("unsupported %s" % type(i))
+        #d.default_factory = lambda:None #I was using this, but found that it caused unnecessary problems
+        #keeping it here for now because it's an idiom that I always forget
+        return d
+             
     def __init__(self,
                  twitter_consumer_key,
                  twitter_consumer_secret,
@@ -189,11 +205,18 @@ class MinglBot(object):
     #If there is an id/screen_name conflict caused by two nodes representing the
     #same user, then this method will combine the two nodes including their FOLLOWs
     #relationships. Currently metadata can be lost such as the original created_at date
-    def _hydrate_users_from_twitter(self,ids=None,screen_names=None):
+    def _hydrate_users_from_twitter(self,users):
+        input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names"})
+        ids = input["ids"]
+        screen_names = input["screen_names"]
         logging.info("Hydrating ids (%s) and screen_names (%s) from Twitter",ids,screen_names)
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
-        twitter_users = timedRetry(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
+        twitter_users = []
+        if (ids and len(ids)>0) or (screen_names and len(screen_names)>0) :
+            twitter_users = timedRetry(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
+        else:
+            return []
         users = []
         for twitter_user in twitter_users:
             data = {'id': twitter_user.id,
@@ -265,8 +288,12 @@ class MinglBot(object):
     
     #Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
     #is None then this method will hydrate the users from Twitter
-    def hydrate_users(self,ids=[],screen_names=[],users=None):
-        logging.info("Hydrating ids (%s) and screen_names (%s) and users (%s) from neo4j",ids,screen_names,users)
+    def hydrate_users(self,users):
+        input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names",User:"users"})
+        ids = input["ids"]
+        screen_names = input["screen_names"]
+        users = input["users"]
+        logging.info("Hydrating from neo4j. ids:(%s) screen_names:(%s) users:(%s)",ids,screen_names,users)
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
         hydrated_users = []
@@ -274,8 +301,6 @@ class MinglBot(object):
         #pull out all users that are already hydrated
         if users:
             for user in users:
-                if type(user) is not User:
-                    raise Exception("users must be of type User")
                 if user.hydrated_at:
                     hydrated_users.append(user)
                     if user.id in ids: ids.remove(user.id)
@@ -284,7 +309,7 @@ class MinglBot(object):
                     ids.append(user.id)
                 else:
                     screen_names.append(user.screen_name)
-                        
+
         getUsersQuery = """
             MATCH (u:User)
             WHERE u.id in {ids} 
@@ -300,16 +325,14 @@ class MinglBot(object):
                 hydrated_users.append(User(user.get_properties()))
                 if id in ids: ids.remove(id)
                 if screen_name in screen_names: screen_names.remove(screen_name)
-        
-        if len(ids) == 0:
-            ids = None
-        if len(screen_names) == 0:
-            screen_names = None
-        if ids or screen_names:
-            hydrated_users.extend(self._hydrate_users_from_twitter(ids=ids,screen_names=screen_names))
-        
+
+        unhydrated_users = []
+        unhydrated_users.extend(ids)
+        unhydrated_users.extend(screen_names)
+        hydrated_users.extend(self._hydrate_users_from_twitter(unhydrated_users))
+
         return hydrated_users
-    
+
     def get_friends_for_user(self,user):
         logging.info("Getting friends of user (%s) (from neo4j if possible)",user)
         users = []
@@ -379,8 +402,17 @@ class MinglBot(object):
                 users.append(user)
             return users
     
-    def get_mutual_friends(self,ids=[],screen_names=[],limit=100,min_num_mutual_friends=2):
-        logging.info("Getting mutual friends for ids (%s) and screen_names (%s)",ids,screen_names)
+    def get_mutual_friends(self,users,limit=100,min_num_mutual_friends=2):
+        input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names",User:"users"})
+        ids = input["ids"]
+        screen_names = input["screen_names"]
+        for the_user in input["users"]:
+            #TODO make this method more efficient by not adding ids for users with friends_found_at
+            if the_user.id:
+                ids.append(the_user.id)
+            else:
+                screen_names.append(the_user.screen_name)
+        logging.info("Getting mutual friends. ids:(%s) screen_names:(%s)",ids,screen_names)
         #First, get list of users for whom friends have not been retrieved
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
