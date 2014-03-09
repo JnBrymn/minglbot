@@ -55,19 +55,6 @@ class User(object):
         return "User(id=%s,screen_name=%s)" % (str(self.id), self.screen_name)
 
 
-#Utilities
-retrySeconds = 60*5
-def timedRetry(func,**args):
-    while True:
-        try:
-            return func(**args)
-        except tweepy.TweepError as e:
-            if e[0][0]["code"] == 88:
-                logging.info("Rate limit exceeded. Sleeping")
-                time.sleep(retrySeconds)
-            else:
-                logging.error("Unexpected error: %s",e)
-                raise e
 
 from collections import defaultdict
 import time
@@ -93,6 +80,20 @@ class MinglBot(object):
         #d.default_factory = lambda:None #I was using this, but found that it caused unnecessary problems
         #keeping it here for now because it's an idiom that I always forget
         return d
+
+    @classmethod
+    def twitter_exception_handling_runner(func,**args):
+        retrySeconds = 60*5
+        while True:
+            try:
+                return func(**args)
+            except tweepy.TweepError as e:
+                if e[0][0]["code"] == 88:
+                    logging.info("Rate limit exceeded. Sleeping")
+                    time.sleep(retrySeconds)
+                else:
+                    logging.error("Unexpected error: %s",e)
+                    raise e
              
     def __init__(self,
                  twitter_consumer_key,
@@ -214,7 +215,7 @@ class MinglBot(object):
             screen_names = [screen_name.lower() for screen_name in screen_names]
         twitter_users = []
         if (ids and len(ids)>0) or (screen_names and len(screen_names)>0) :
-            twitter_users = timedRetry(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
+            twitter_users = MinglBot.twitter_exception_handling_runner(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
         else:
             return []
         users = []
@@ -373,11 +374,11 @@ class MinglBot(object):
         ids = []
         query = ""
         if type(user) is int:
-            ids = timedRetry(self.twitter.friends_ids,user_id=user,count=5000)
+            ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,user_id=user,count=5000)
             query += "MERGE (a:User {id:{id}})"
         elif type(user) is str:
             user = user.lower()
-            ids = timedRetry(self.twitter.friends_ids,screen_name=user,count=5000)
+            ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,screen_name=user,count=5000)
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
             raise Exception("user must be either integer for id, string for screen_name")
