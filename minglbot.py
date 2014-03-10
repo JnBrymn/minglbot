@@ -1,4 +1,5 @@
 #TODOs
+#turn off neo4jlogging
 #make twitter and graph private and make all *_at attributes @properties
 #handle nonexistant (friends and hydration)
 #handle secret users (friends and hydration)
@@ -82,7 +83,7 @@ class MinglBot(object):
         return d
 
     @classmethod
-    def twitter_exception_handling_runner(func,**args):
+    def twitter_exception_handling_runner(cls,func,**args):
         retrySeconds = 60*5
         while True:
             try:
@@ -210,11 +211,11 @@ class MinglBot(object):
         input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names"})
         ids = input["ids"]
         screen_names = input["screen_names"]
-        logging.info("Hydrating ids (%s) and screen_names (%s) from Twitter",ids,screen_names)
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
         twitter_users = []
         if (ids and len(ids)>0) or (screen_names and len(screen_names)>0) :
+            logging.info("Hydrating ids from Twitter. ids:(%s) screen_names:(%s) from Twitter",ids,screen_names)
             twitter_users = MinglBot.twitter_exception_handling_runner(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
         else:
             return []
