@@ -1,10 +1,19 @@
 #TODOs
+#make GroupedUsers an object, and let everything that takes an array of users also take that
+#make the minglbot user the testing database unless a special testing parameter is turned on
 #turn off neo4jlogging
+#all friend getters multidirectional (e.g. friend or follow)
+## _get_friends_from_twitter
+## get_mutual_friends
+#make "in between" function to find popular users U s.t. A-->U<--B
+#create warning if friends are too popular?
+#make an "introductions" query? really, you'd often want an introduction to the FOLLOWERS of some group if you're recruiting
+##introduction should also take into account if they're already following you. You also need to know why someone should follow you
 #make twitter and graph private and make all *_at attributes @properties
 #handle nonexistant (friends and hydration)
 #handle secret users (friends and hydration)
-#change _get_user_from_neo4j to userS (plural)
 #guard against "could not authenticate" code 32
+#add limit to num users to hydrate and num friends to retrieve
 
 import os
 import logging #see http://docs.python.org/2/howto/logging
@@ -31,7 +40,9 @@ class User(object):
                 self.screen_name = user["screen_name"].lower()
                 identified = True
             if not identified:
-                raise Exception("all users must have either an id or a screen_name")
+                err_msg = "all users must have either an id or a screen_name"
+                logger.error(err_msg)
+                raise Exception(err_msq)
             if "created_at" in user:
                 self.created_at = user["created_at"]
             if "hydrated_at" in user:
@@ -39,7 +50,7 @@ class User(object):
             if "friends_found_at" in user:
                 self.friends_found_at = user["friends_found_at"]
             self._properties = user
-        elif isinstance(User(id=100),User):
+        elif isinstance(user,User):
             raise NotImplementedError()
         
     @property
@@ -76,8 +87,8 @@ class MinglBot(object):
                     break
             else:
                 if error_on_unknown_type:
-                    raise Exception("unsupported %s" % type(i))
                     logger.error("unsupported %s" % type(i))
+                    raise Exception("unsupported %s" % type(i))
         #d.default_factory = lambda:None #I was using this, but found that it caused unnecessary problems
         #keeping it here for now because it's an idiom that I always forget
         return d
@@ -110,7 +121,6 @@ class MinglBot(object):
         self.twitter = tweepy.API(auth)
         
         neo4j_host = neo4j_host if neo4j_host else os.getenv("NEO4J_HOST")
-        from py2neo import neo4j
         self.graph = neo4j.GraphDatabaseService("http://"+ neo4j_host +"/db/data")
         
         #TODO move this to init script
@@ -128,80 +138,7 @@ class MinglBot(object):
         except:
             pass
     
-    def _get_user_from_neo4j(self,user):
-        logging.info("Getting user (%s) from neo4j",user)
-        if type(user) is int:
-            query = "MATCH (u:User{id:{id}}) RETURN u"
-            u = neo4j.CypherQuery(self.graph,query).execute_one(id=user)
-            user = User(user)
-            if u is None:
-                return None
-            if u["screen_name"]:
-                user.screen_name = u["screen_name"].lower()
-        elif type(user) is str:
-            query = "MATCH (u:User{screen_name:LOWER({screen_name})}) RETURN u"
-            u = neo4j.CypherQuery(self.graph,query).execute_one(screen_name=user.lower())
-            user = User(user)
-            if u is None:
-                return None
-            if u["id"]:
-                user.id = u["id"]
-        else:
-            logging.error("User was neither id or screen_name")
-            raise Exception("user must be either integer for id, string for screen_name")
-        user._properties = dict(user._properties.items() + u.get_properties().items())
-        if u["created_at"]:
-            user.created_at = u["created_at"]
-        if u["hydrated_at"]:
-            user.hydrated_at = u["hydrated_at"]
-        if u["friends_found_at"]:
-            user.friends_found_at = u["friends_found_at"] 
-        return user
     
-    #Creates user in neo4j based upon string for screen_name or int for id
-    def _create_user_in_neo4j(self,user):
-        logging.info("Creating user (%s) in neo4j",user)
-        if type(user) is int:
-            query = """
-                MERGE (u:User {id:{id}})
-                ON CREATE SET
-                    u.created_at = timestamp()
-                RETURN u
-            """
-            u = neo4j.CypherQuery(self.graph,query).execute_one(id=user)    
-        elif type(user) is str:
-            query = """
-                MERGE (u:User {screen_name:LOWER({screen_name})})
-                ON CREATE SET
-                    u.created_at = timestamp()
-                RETURN u
-            """
-            u = neo4j.CypherQuery(self.graph,query).execute_one(screen_name=user.lower())
-        else:
-            logging.error("User was neither id nor screen_name")
-            raise Exception("user must be either integer for id, string for screen_name")
-        return User(u.get_properties())
-
-            
-    def _delete_user_from_neo4j(self,user):
-        logging.info("Deleting user (%s) from neo4j",user)
-        if type(user) is int:
-            query = """
-                MATCH (u:User {id:{id}})
-                OPTIONAL MATCH (u)-[r]-()
-                DELETE u,r
-            """
-            u = neo4j.CypherQuery(self.graph,query).run(id=user)    
-        elif type(user) is str:
-            query = """
-                MATCH (u:User {screen_name:LOWER({screen_name})})
-                OPTIONAL MATCH (u)-[r]-()
-                DELETE u,r
-            """
-            u = neo4j.CypherQuery(self.graph,query).run(screen_name=user.lower())
-        else:
-            logging.error("User was neither id nor screen_name")
-            raise Exception("user must be either integer for id, string for screen_name")
     
     #Pulls up to 100 users from twitter by id or by screen_name.
     #If there is an id/screen_name conflict caused by two nodes representing the
@@ -335,41 +272,6 @@ class MinglBot(object):
 
         return hydrated_users
 
-    def get_friends_for_user(self,user):
-        logging.info("Getting friends of user (%s) (from neo4j if possible)",user)
-        users = []
-        this_user = None
-        query = """
-            MATCH (u:User {id:{id}})-[:FOLLOWS]->(f)
-            RETURN f
-        """
-        if type(user) is int:
-            this_user = self._get_user_from_neo4j(user)
-            identifier = user
-        elif type(user) is str:
-            user = user.lower()
-            identifier = user            
-            query = """
-                MATCH (u:User {screen_name:LOWER({screen_name})})-[:FOLLOWS]->(f)
-                RETURN f
-            """
-            this_user = self._get_user_from_neo4j(user)
-        elif type(user) == User:
-            this_user = user
-            identifier = this_user.id
-        else:
-            raise Exception("user must be either integer for id, string for screen_name, or User")
-        if this_user == None:
-            this_user = self._create_user_in_neo4j(identifier)
-        if this_user.hydrated_at:
-            us = neo4j.CypherQuery(self.graph,query).execute(id=identifier,screen_name=identifier)
-            for u in us:
-                users.append(User(u.values[0].get_properties()))
-            return users
-        else:
-            return self._get_friends_from_twitter(identifier)
-            
-
     def _get_friends_from_twitter(self,user,return_users=True):
         logging.info("Getting friends of %s from Twitter",user)
         ids = []
@@ -382,7 +284,9 @@ class MinglBot(object):
             ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,screen_name=user,count=5000)
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
-            raise Exception("user must be either integer for id, string for screen_name")
+            err_msg = "user must be either integer for id, string for screen_name. Found %s" % str(user)
+            logger.error(err_msg)
+            raise Exception(err_msg)
         query += """
             ON CREATE SET
               a.created_at = timestamp()
@@ -415,6 +319,7 @@ class MinglBot(object):
             else:
                 screen_names.append(the_user.screen_name)
         logging.info("Getting mutual friends. ids:(%s) screen_names:(%s)",ids,screen_names)
+
         #First, get list of users for whom friends have not been retrieved
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
