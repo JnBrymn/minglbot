@@ -11,7 +11,6 @@ if test != 1:
     raise Exception("TESTING ON NON-TEST GRAPH DB!!!!! ABORTED!!!!!")
 ######IMPORTANT FAST FAIL TEST##############
 
-
 #Test setup
 kmbrymn = 134649059
 jnbrymn = "jnbrymn"
@@ -135,5 +134,15 @@ users = m.hydrate_users(["jnbrymn",u])
 assert len(users) == 1
 assert users[0].id == None #since he doesn't have an id it proves that we haven't gone to Twitter
 
+
+
+#Test that get_mutual_friends takes and returns GroupedUsers
+friends = {}
+friends[3]=[15547216,628159493,"jnbrymn"]
+friends[2]=["softwaredoug"]
+groupedUsers = minglbot.GroupedUsers(friends)
+friends = m.get_mutual_friends(groupedUsers,limit=100,min_num_mutual_friends=2)
+assert len(friends[2]) > 0
+assert isinstance(friends,minglbot.GroupedUsers)
 
 

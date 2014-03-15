@@ -1,6 +1,5 @@
 #TODOs
-#make GroupedUsers an object, and let everything that takes an array of users also take that
-#make the minglbot user the testing database unless a special testing parameter is turned on
+#add limit to num users to hydrate and num friends to retrieve so that you can easily get friends or hydrate the first 10 of a large list
 #turn off neo4jlogging
 #all friend getters multidirectional (e.g. friend or follow)
 ## _get_friends_from_twitter
@@ -13,7 +12,6 @@
 #handle nonexistant (friends and hydration)
 #handle secret users (friends and hydration)
 #guard against "could not authenticate" code 32
-#add limit to num users to hydrate and num friends to retrieve
 
 import os
 import logging #see http://docs.python.org/2/howto/logging
@@ -52,20 +50,41 @@ class User(object):
             self._properties = user
         elif isinstance(user,User):
             raise NotImplementedError()
-        
+
     @property
     def identifier(self):
         if self.id:
             return id
         else:
             return screen_name
-    
+
     def __getitem__(self,key):
         return self._properties[key]
 
     def __repr__(self):
         return "User(id=%s,screen_name=%s)" % (str(self.id), self.screen_name)
 
+
+from collections import OrderedDict
+class GroupedUsers(OrderedDict):
+    def __init__(self,d):
+        for k,v in d.iteritems():
+            if type(v) != list:
+                raise Exception("All values in dict must be lists")
+
+        super(GroupedUsers,self).__init__(reversed(sorted(d.items())))
+        #after constructor runs make sure that no new users can be added
+        self.__setattr__ = self._unimplemented
+
+    def _unimplemented(self,key,val):
+        raise Exception("not supported")
+
+    def get_all(self):
+        users = []
+        for k,v in self.iteritems():
+            for user in v:
+                users.append(user)
+        return users
 
 
 from collections import defaultdict
@@ -77,7 +96,9 @@ import copy
 class MinglBot(object):
     @classmethod
     def split_up_input(cls,input,types_map,error_on_unknown_type=True):
-        if not isinstance(input,list):
+        if isinstance(input,GroupedUsers):
+            input = input.get_all()
+        elif not isinstance(input,list):
             input = [input]
         d = defaultdict(list)
         for i in input:
@@ -89,8 +110,6 @@ class MinglBot(object):
                 if error_on_unknown_type:
                     logger.error("unsupported %s" % type(i))
                     raise Exception("unsupported %s" % type(i))
-        #d.default_factory = lambda:None #I was using this, but found that it caused unnecessary problems
-        #keeping it here for now because it's an idiom that I always forget
         return d
 
     @classmethod
@@ -106,7 +125,7 @@ class MinglBot(object):
                 else:
                     logging.error("Unexpected error: %s",e)
                     raise e
-             
+
     def __init__(self,
                  twitter_consumer_key,
                  twitter_consumer_secret,
@@ -119,14 +138,14 @@ class MinglBot(object):
         auth = tweepy.OAuthHandler(twitter_consumer_key, twitter_consumer_secret)
         auth.set_access_token(twitter_bot_token, twitter_bot_secret)
         self.twitter = tweepy.API(auth)
-        
+
         neo4j_host = neo4j_host if neo4j_host else os.getenv("NEO4J_HOST")
         self.graph = neo4j.GraphDatabaseService("http://"+ neo4j_host +"/db/data")
-        
+
         #TODO move this to init script
         try:
             logging.info("Creating uniqueness constraint on User id and screen_name")
-            
+
             neo4j.CypherQuery(graph,"""
                 CREATE CONSTRAINT ON (u:User) 
                 ASSERT u.id IS UNIQUE
@@ -137,9 +156,9 @@ class MinglBot(object):
             """).execute()
         except:
             pass
-    
-    
-    
+
+
+
     #Pulls up to 100 users from twitter by id or by screen_name.
     #If there is an id/screen_name conflict caused by two nodes representing the
     #same user, then this method will combine the two nodes including their FOLLOWs
@@ -224,7 +243,7 @@ class MinglBot(object):
                 u = neo4j.CypherQuery(self.graph,query_string).execute_one(**data)
             users.append(User(u.get_properties()))
         return users
-    
+
     #Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
     #is None then this method will hydrate the users from Twitter
     def hydrate_users(self,users):
@@ -236,7 +255,7 @@ class MinglBot(object):
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
         hydrated_users = []
-        
+
         #pull out all users that are already hydrated
         if users:
             for user in users:
@@ -307,7 +326,7 @@ class MinglBot(object):
                 user.created_at = 1
                 users.append(user)
             return users
-    
+
     def get_mutual_friends(self,users,limit=100,min_num_mutual_friends=2):
         input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names",User:"users"})
         ids = input["ids"]
@@ -339,12 +358,12 @@ class MinglBot(object):
                     screen_name = user["screen_name"].lower()
                 if id in ids: ids.remove(id)
                 if screen_name in screen_names: screen_names.remove(screen_name)
-        
+
         #Load these users into neo4j
         ids.extend(screen_names)
         for id in ids:
             self._get_friends_from_twitter(id,return_users=False)
-        
+
         #Retrieve list of mutual friends sorted by number of mutual friendships
         query = """
             MATCH (u:User)-[:FOLLOWS]->(f:User)
@@ -365,5 +384,5 @@ class MinglBot(object):
         friends = defaultdict(list)
         for r in results:
             friends[r.values[0]].append(User(r.values[1].get_properties()))
-        return friends
+        return GroupedUsers(friends)
 
