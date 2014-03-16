@@ -1,5 +1,4 @@
 #TODOs
-#add limit to num users to hydrate and num friends to retrieve so that you can easily get friends or hydrate the first 10 of a large list
 #turn off neo4jlogging
 #all friend getters multidirectional (e.g. friend or follow)
 ## _get_friends_from_twitter
@@ -95,21 +94,23 @@ import copy
 
 class MinglBot(object):
     @classmethod
-    def split_up_input(cls,input,types_map,error_on_unknown_type=True):
+    def _split_up_input(cls,input,types_map,error_on_unknown_type=True,num_to_use=float("inf")):
         if isinstance(input,GroupedUsers):
             input = input.get_all()
         elif not isinstance(input,list):
             input = [input]
         d = defaultdict(list)
-        for i in input:
+        for i,el in enumerate(input):
+            if i >= num_to_use:
+                break
             for t,n in types_map.iteritems():
-                if isinstance(i,t):
-                    d[n].append(i)
+                if isinstance(el,t):
+                    d[n].append(el)
                     break
             else:
                 if error_on_unknown_type:
-                    logger.error("unsupported %s" % type(i))
-                    raise Exception("unsupported %s" % type(i))
+                    logger.error("unsupported %s" % type(el))
+                    raise Exception("unsupported %s" % type(el))
         return d
 
     @classmethod
@@ -164,7 +165,7 @@ class MinglBot(object):
     #same user, then this method will combine the two nodes including their FOLLOWs
     #relationships. Currently metadata can be lost such as the original created_at date
     def _hydrate_users_from_twitter(self,users):
-        input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names"})
+        input = MinglBot._split_up_input(users,{int:"ids",str:"screen_names"},num_to_use=float("inf"))
         ids = input["ids"]
         screen_names = input["screen_names"]
         if screen_names:
@@ -244,10 +245,13 @@ class MinglBot(object):
             users.append(User(u.get_properties()))
         return users
 
-    #Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
-    #is None then this method will hydrate the users from Twitter
-    def hydrate_users(self,users):
-        input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names",User:"users"})
+    def hydrate_users(self,users,num_to_use=float("inf")):
+        """Populates all parameters of supplied users.
+
+        Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
+        is None then this method will hydrate the users from Twitter
+        """
+        input = MinglBot._split_up_input(users,{int:"ids",str:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         users = input["users"]
@@ -327,8 +331,20 @@ class MinglBot(object):
                 users.append(user)
             return users
 
-    def get_mutual_friends(self,users,limit=100,min_num_mutual_friends=2):
-        input = MinglBot.split_up_input(users,{int:"ids",str:"screen_names",User:"users"})
+    def get_mutual_friends(self,
+            users,
+            num_to_use=float("inf"),
+            limit=100,
+            min_num_mutual_friends=1
+            ):
+        """Retrieve mutual friends.
+
+        Keyword arguments:
+        num_to_use -- issues query based only upon the first num_to_use users (default inf)
+        limit -- the number of friends to return (default 100)
+        min_num_mutual_friends -- all users returned must be mutual friends of this number of input friends (defaul 1)
+        """
+        input = MinglBot._split_up_input(users,{int:"ids",str:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         for the_user in input["users"]:
