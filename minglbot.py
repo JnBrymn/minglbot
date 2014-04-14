@@ -1,4 +1,12 @@
 #TODOs
+#finish get_with_min_popularity
+#make log messages be code that you can copy and paste and run
+#neo4j is slower than it should be... why?
+#figure out why creating friend relationships gets so slow with the current Cypher in get_friends_from_twitter
+#figure out why I'm haveing to double get friends to get them all (try running a get central nodes run and then do it again... it pulls in new friends... should be the same)
+#figure out why I'm haveing to double hydrate long lists users that come back from get_mutual_friends. The first hydrate doesn't get them all.
+#encapsulate the graphQueries and log them to a different file
+#experiment with the get_friends_from_twitter query and see if I can make it faster
 #turn off neo4jlogging
 #all friend getters multidirectional (e.g. friend or follow)
 ## _get_friends_from_twitter
@@ -10,7 +18,10 @@
 #make twitter and graph private and make all *_at attributes @properties
 #handle nonexistant (friends and hydration)
 #handle secret users (friends and hydration)
+#figure out what to do with other API tokens
 #guard against "could not authenticate" code 32
+#guard against "deadlock" if using more than one process that talks to neo4
+#make the hydration preserve the ordering and grouping
 
 import os
 import logging #see http://docs.python.org/2/howto/logging
@@ -24,11 +35,11 @@ class User(object):
         self.hydrated_at = None
         self.friends_found_at = None
         self._properties = {}
-        if type(user) is int:
+        if isinstance(user,int):
             self.id = user
-        elif type(user) is str:
+        elif isinstance(user,basestring):
             self.screen_name = user.lower()
-        elif type(user) is dict:
+        elif isinstance(user,dict):
             identified = False
             if "id" in user:
                 self.id = user["id"]
@@ -38,7 +49,7 @@ class User(object):
                 identified = True
             if not identified:
                 err_msg = "all users must have either an id or a screen_name"
-                logger.error(err_msg)
+                logging.error(err_msg)
                 raise Exception(err_msq)
             if "created_at" in user:
                 self.created_at = user["created_at"]
@@ -60,6 +71,9 @@ class User(object):
     def __getitem__(self,key):
         return self._properties[key]
 
+    def __contains__(self,key):
+        return key in self._properties
+
     def __repr__(self):
         return "User(id=%s,screen_name=%s)" % (str(self.id), self.screen_name)
 
@@ -80,9 +94,16 @@ class GroupedUsers(OrderedDict):
 
     def get_all(self):
         users = []
-        for k,v in self.iteritems():
-            for user in v:
-                users.append(user)
+        for _,more_users in self.iteritems():
+            users.extend(more_users)
+        return users
+
+    def get_all_with_min_popularity(self,n):
+        """return list of users who have at least n followers from original group"""
+        users = []
+        for num,more_users in self.iteritems():
+            if num >= n:
+                users.extend(more_users)
         return users
 
 
@@ -109,7 +130,7 @@ class MinglBot(object):
                     break
             else:
                 if error_on_unknown_type:
-                    logger.error("unsupported %s" % type(el))
+                    logging.error("unsupported %s" % type(el))
                     raise Exception("unsupported %s" % type(el))
         return d
 
@@ -120,7 +141,9 @@ class MinglBot(object):
             try:
                 return func(**args)
             except tweepy.TweepError as e:
-                if e[0][0]["code"] == 88:
+                if e[0] == "Not authorized.":
+                    logging.info("Not authorized.") #TODO return errors when necessary
+                elif e[0][0]["code"] == 88:
                     logging.info("Rate limit exceeded. Sleeping")
                     time.sleep(retrySeconds)
                 else:
@@ -144,16 +167,19 @@ class MinglBot(object):
         self.graph = neo4j.GraphDatabaseService("http://"+ neo4j_host +"/db/data")
 
         #TODO move this to init script
+        logging.info("Creating uniqueness constraint on User id and screen_name")
         try:
-            logging.info("Creating uniqueness constraint on User id and screen_name")
-
             neo4j.CypherQuery(graph,"""
-                CREATE CONSTRAINT ON (u:User) 
-                ASSERT u.id IS UNIQUE
-            """).execute()
-            neo4j.CypherQuery(graph,"""
-                CREATE CONSTRAINT ON (u:User) 
+                CREATE CONSTRAINT ON (u:User)
                 ASSERT u.screen_name IS UNIQUE
+            """).execute()
+        except:
+            pass
+
+        try:
+            neo4j.CypherQuery(graph,"""
+                CREATE CONSTRAINT ON (u:User)
+                ASSERT u.id IS UNIQUE
             """).execute()
         except:
             pass
@@ -165,7 +191,7 @@ class MinglBot(object):
     #same user, then this method will combine the two nodes including their FOLLOWs
     #relationships. Currently metadata can be lost such as the original created_at date
     def _hydrate_users_from_twitter(self,users):
-        input = MinglBot._split_up_input(users,{int:"ids",str:"screen_names"},num_to_use=float("inf"))
+        input = MinglBot._split_up_input(users,{int:"ids",basestring:"screen_names"},num_to_use=float("inf"))
         ids = input["ids"]
         screen_names = input["screen_names"]
         if screen_names:
@@ -251,7 +277,7 @@ class MinglBot(object):
         Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
         is None then this method will hydrate the users from Twitter
         """
-        input = MinglBot._split_up_input(users,{int:"ids",str:"screen_names",User:"users"},num_to_use=num_to_use)
+        input = MinglBot._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         users = input["users"]
@@ -299,16 +325,16 @@ class MinglBot(object):
         logging.info("Getting friends of %s from Twitter",user)
         ids = []
         query = ""
-        if type(user) is int:
+        if isinstance(user,int):
             ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,user_id=user,count=5000)
             query += "MERGE (a:User {id:{id}})"
-        elif type(user) is str:
+        elif isinstance(user,basestring):
             user = user.lower()
             ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,screen_name=user,count=5000)
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
             err_msg = "user must be either integer for id, string for screen_name. Found %s" % str(user)
-            logger.error(err_msg)
+            logging.error(err_msg)
             raise Exception(err_msg)
         query += """
             ON CREATE SET
@@ -344,7 +370,7 @@ class MinglBot(object):
         limit -- the number of friends to return (default 100)
         min_num_mutual_friends -- all users returned must be mutual friends of this number of input friends (defaul 1)
         """
-        input = MinglBot._split_up_input(users,{int:"ids",str:"screen_names",User:"users"},num_to_use=num_to_use)
+        input = MinglBot._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         for the_user in input["users"]:
@@ -369,11 +395,11 @@ class MinglBot(object):
         for u in neo4j.CypherQuery(self.graph,getUsersQuery).execute(ids=ids,screen_names=screen_names):
             user = u.values[0]
             if user["friends_found_at"]:
-                id = user["id"]
+                if user["id"] and (user["id"] in ids):
+                    ids.remove(user["id"])
                 if user["screen_name"]:
                     screen_name = user["screen_name"].lower()
-                if id in ids: ids.remove(id)
-                if screen_name in screen_names: screen_names.remove(screen_name)
+                    if screen_name in screen_names: screen_names.remove(screen_name)
 
         #Load these users into neo4j
         ids.extend(screen_names)
