@@ -1,5 +1,6 @@
 #TODOs
-#finish get_with_min_popularity
+#INFO:root:Executing job: 451444056241881090:o3design,ustream:demo
+#      ERROR:root:unsupported <type 'unicode'>
 #make log messages be code that you can copy and paste and run
 #neo4j is slower than it should be... why?
 #figure out why creating friend relationships gets so slow with the current Cypher in get_friends_from_twitter
@@ -22,10 +23,12 @@
 #guard against "could not authenticate" code 32
 #guard against "deadlock" if using more than one process that talks to neo4
 #make the hydration preserve the ordering and grouping
+#handle users that don't allow their friends to be seen by marking them as friends_found_at - similarly for hydrated
+#add a real testing environment
 
 import os
 import logging #see http://docs.python.org/2/howto/logging
-logging.basicConfig(filename="minglbot.log",level=logging.INFO)
+logging.basicConfig(filename="mingl.log",level=logging.INFO)
 
 class User(object):
     def __init__(self,user):
@@ -113,7 +116,7 @@ import tweepy
 from py2neo import neo4j
 import copy
 
-class MinglBot(object):
+class Mingl(object):
     @classmethod
     def _split_up_input(cls,input,types_map,error_on_unknown_type=True,num_to_use=float("inf")):
         if isinstance(input,GroupedUsers):
@@ -141,8 +144,9 @@ class MinglBot(object):
             try:
                 return func(**args)
             except tweepy.TweepError as e:
-                if e[0] == "Not authorized.":
+                if e.reason == "Not authorized.":
                     logging.info("Not authorized.") #TODO return errors when necessary
+                    return [] #TODO is empty array the correct thing to return?
                 elif e[0][0]["code"] == 88:
                     logging.info("Rate limit exceeded. Sleeping")
                     time.sleep(retrySeconds)
@@ -156,7 +160,7 @@ class MinglBot(object):
                  twitter_bot_token=None,
                  twitter_bot_secret=None,
                  neo4j_host=None):
-        logging.info("Initializing MinglBot")
+        logging.info("Initializing Mingl")
         twitter_bot_token = twitter_bot_token if twitter_bot_token else os.getenv("TWITTER_BOT_TOKEN")
         twitter_bot_secret = twitter_bot_secret if twitter_bot_secret else os.getenv("TWITTER_BOT_SECRET")
         auth = tweepy.OAuthHandler(twitter_consumer_key, twitter_consumer_secret)
@@ -191,7 +195,7 @@ class MinglBot(object):
     #same user, then this method will combine the two nodes including their FOLLOWs
     #relationships. Currently metadata can be lost such as the original created_at date
     def _hydrate_users_from_twitter(self,users):
-        input = MinglBot._split_up_input(users,{int:"ids",basestring:"screen_names"},num_to_use=float("inf"))
+        input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names"},num_to_use=float("inf"))
         ids = input["ids"]
         screen_names = input["screen_names"]
         if screen_names:
@@ -199,7 +203,7 @@ class MinglBot(object):
         twitter_users = []
         if (ids and len(ids)>0) or (screen_names and len(screen_names)>0) :
             logging.info("Hydrating ids from Twitter. ids:(%s) screen_names:(%s) from Twitter",ids,screen_names)
-            twitter_users = MinglBot.twitter_exception_handling_runner(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
+            twitter_users = Mingl.twitter_exception_handling_runner(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
         else:
             return []
         users = []
@@ -277,7 +281,7 @@ class MinglBot(object):
         Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
         is None then this method will hydrate the users from Twitter
         """
-        input = MinglBot._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
+        input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         users = input["users"]
@@ -326,11 +330,11 @@ class MinglBot(object):
         ids = []
         query = ""
         if isinstance(user,int):
-            ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,user_id=user,count=5000)
+            ids = Mingl.twitter_exception_handling_runner(self.twitter.friends_ids,user_id=user,count=5000)
             query += "MERGE (a:User {id:{id}})"
         elif isinstance(user,basestring):
             user = user.lower()
-            ids = MinglBot.twitter_exception_handling_runner(self.twitter.friends_ids,screen_name=user,count=5000)
+            ids = Mingl.twitter_exception_handling_runner(self.twitter.friends_ids,screen_name=user,count=5000)
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
             err_msg = "user must be either integer for id, string for screen_name. Found %s" % str(user)
@@ -370,7 +374,7 @@ class MinglBot(object):
         limit -- the number of friends to return (default 100)
         min_num_mutual_friends -- all users returned must be mutual friends of this number of input friends (defaul 1)
         """
-        input = MinglBot._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
+        input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         for the_user in input["users"]:

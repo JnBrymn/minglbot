@@ -1,14 +1,14 @@
-import minglbot
+import mingl
 import os
 from py2neo import neo4j
 
 ######IMPORTANT FAST FAIL TEST##############
-m = minglbot.MinglBot(os.getenv("TWITTER_CONSUMER_KEY"), os.getenv("TWITTER_CONSUMER_SECRET"), neo4j_host="localhost:7474")
+m = mingl.Mingl(os.getenv("TWITTER_CONSUMER_KEY"), os.getenv("TWITTER_CONSUMER_SECRET"), neo4j_host="localhost:7474")
 test = neo4j.CypherQuery(m.graph,"""
-    MATCH (x {this_is_a_test_db:true}) return count(*)
+    MATCH (x {this_is_a_test_db:true}) RETURN count(*)
 """).execute_one()
 if test != 1:
-    raise Exception("TESTING ON NON-TEST GRAPH DB!!!!! ABORTED!!!!!")
+    raise Exception("TESTING ON NON-TEST GRAPH DB!!!!! ABORTED!!!!!\nCREATE ({this_is_a_test_db:true}) if this is a test db.")
 ######IMPORTANT FAST FAIL TEST##############
 
 #Test setup
@@ -34,7 +34,7 @@ def _create_user_in_neo4j(mingl_bot,user):
         u = neo4j.CypherQuery(mingl_bot.graph,query).execute_one(screen_name=user.lower())
     else:
         raise Exception("user must be either integer for id, string for screen_name")
-    return minglbot.User(u.get_properties())
+    return mingl.User(u.get_properties())
 
         
 def _delete_user_from_neo4j(mingl_bot,user):
@@ -55,9 +55,9 @@ def _delete_user_from_neo4j(mingl_bot,user):
     else:
         raise Exception("user must be either integer for id, string for screen_name")
 
-def has_friend(minglbot,user_screen_name,friend_id):
+def has_friend(mingl,user_screen_name,friend_id):
     #TODO change to user,friend (can be id,screen_name,or user)
-    result = neo4j.CypherQuery(minglbot.graph,"""
+    result = neo4j.CypherQuery(mingl.graph,"""
         MATCH (u:User{screen_name:LOWER({screen_name})})-[:FOLLOWS]->(f:User{id:{id}})
         RETURN COUNT(*)
     """).execute_one(screen_name=user_screen_name,id=friend_id)
@@ -128,7 +128,7 @@ assert len(friends[2]) > 0
 
 #Test hydration of list of Users
 _delete_user_from_neo4j(m,"jnbrymn")
-u = minglbot.User("jnbrymn")
+u = mingl.User("jnbrymn")
 u.hydrated_at = 1 #cheating here by pretending that user is hydrated
 users = m.hydrate_users(["jnbrymn",u])
 assert len(users) == 1
@@ -140,9 +140,9 @@ assert users[0].id == None #since he doesn't have an id it proves that we haven'
 friends = {}
 friends[3]=[15547216,628159493,"jnbrymn"]
 friends[2]=["softwaredoug"]
-groupedUsers = minglbot.GroupedUsers(friends)
+groupedUsers = mingl.GroupedUsers(friends)
 friends = m.get_mutual_friends(groupedUsers,limit=100,min_num_mutual_friends=2)
 assert len(friends[2]) > 0
-assert isinstance(friends,minglbot.GroupedUsers)
+assert isinstance(friends,mingl.GroupedUsers)
 
 
