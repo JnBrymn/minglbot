@@ -1,29 +1,24 @@
 #TODOs
-#INFO:root:Executing job: 451444056241881090:o3design,ustream:demo
-#      ERROR:root:unsupported <type 'unicode'>
-#make log messages be code that you can copy and paste and run
-#neo4j is slower than it should be... why?
-#figure out why creating friend relationships gets so slow with the current Cypher in get_friends_from_twitter
-#figure out why I'm haveing to double get friends to get them all (try running a get central nodes run and then do it again... it pulls in new friends... should be the same)
-#figure out why I'm haveing to double hydrate long lists users that come back from get_mutual_friends. The first hydrate doesn't get them all.
-#encapsulate the graphQueries and log them to a different file
-#experiment with the get_friends_from_twitter query and see if I can make it faster
-#turn off neo4jlogging
 #all friend getters multidirectional (e.g. friend or follow)
 ## _get_friends_from_twitter
 ## get_mutual_friends
 #make "in between" function to find popular users U s.t. A-->U<--B
+#make the hydration preserve the ordering and grouping
+#make log messages be code that you can copy and paste and run
+#figure out why the uniqueness constraints aren't being set by default
+#handle users that don't allow their friends to be seen by marking them as friends_found_at - similarly for hydrated
+#?figure out why I'm haveing to double get friends to get them all (try running a get central nodes run and then do it again... it pulls in new friends... should be the same)
+#"figure out why I'm haveing to double hydrate long lists users that come back from get_mutual_friends. The first hydrate doesn't get them all.
+#encapsulate the graphQueries and log them to a different file
+#turn off neo4jlogging
 #create warning if friends are too popular?
 #make an "introductions" query? really, you'd often want an introduction to the FOLLOWERS of some group if you're recruiting
 ##introduction should also take into account if they're already following you. You also need to know why someone should follow you
 #make twitter and graph private and make all *_at attributes @properties
 #handle nonexistant (friends and hydration)
-#handle secret users (friends and hydration)
-#figure out what to do with other API tokens
+#figure out what to do with other API tokens - this can be used to greatly increase my throughput
 #guard against "could not authenticate" code 32
 #guard against "deadlock" if using more than one process that talks to neo4
-#make the hydration preserve the ordering and grouping
-#handle users that don't allow their friends to be seen by marking them as friends_found_at - similarly for hydrated
 #add a real testing environment
 
 import os

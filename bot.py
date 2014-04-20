@@ -77,6 +77,7 @@ class TwitterBot(object):
         num_jobs = 0
         mentions = self._twitter.mentions_timeline(since_id=self._since_id,count=800)
         for mention in mentions:
+            self._since_id = mention.id
             if mention.id in self._done_job_ids:
                 continue
             screen_names = []
@@ -91,7 +92,6 @@ class TwitterBot(object):
                     mention.author.followers_count
                 )
         logging.info("Refreshed job queue. Found {0} jobs".format(num_jobs))
-        self._since_id = mention.id 
         
     def _execute_job(self):
         job = self._job_queue.get()
@@ -122,7 +122,6 @@ class TwitterBot(object):
                     tweet += " @"+friend.screen_name
         else:
             tweet = "@{0}, these users don't seem to have much in common".format(job.author)
-        logging.info("Sending tweet: "+tweet)
         self._send_tweet(tweet,job.id)
     
         ######################
@@ -144,6 +143,7 @@ class TwitterBot(object):
 
     def _send_tweet(self,tweet,job_id):
         """thin wrapper so that I won't send tweets to my account"""
+        logging.info("Sending tweet: \"{0}\" for job {1}".format(tweet,job_id))
         if self._screen_name == "jnbrymn":
             return
         self._twitter.update_status(tweet,job_id)
