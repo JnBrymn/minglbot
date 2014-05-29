@@ -113,16 +113,16 @@ assert us[2]["name"] == "Kumiko Berryman"
 jnbrymn = "jnbrymn"
 kmbrymn = 134649059
 _delete_user_from_neo4j(m,jnbrymn)
-users = m._get_friends_from_twitter(jnbrymn) #should also connect the friends
+users = m._get_relations_from_twitter(jnbrymn,direction="friends") #should also connect the friends
 assert has_friend(m,jnbrymn,kmbrymn)
 
 
-#Test that get_mutual_friends returns friends
+#Test that get_friends returns friends
 _delete_user_from_neo4j(m,15547216)
 _delete_user_from_neo4j(m,628159493)
 _delete_user_from_neo4j(m,"jnbrymn")
 _delete_user_from_neo4j(m,"softwaredoug")
-friends = m.get_mutual_friends([15547216,628159493,"jnbrymn","softwaredoug"],limit=100,min_num_mutual_friends=2)
+friends = m.get_friends([15547216,628159493,"jnbrymn","softwaredoug"],limit=100,min_num_mutual_friends=2)
 assert len(friends[2]) > 0
 
 
@@ -136,12 +136,12 @@ assert users[0].id == None #since he doesn't have an id it proves that we haven'
 
 
 
-#Test that get_mutual_friends takes and returns GroupedUsers
+#Test that get_friends takes and returns GroupedUsers
 friends = {}
 friends[3]=[15547216,628159493,"jnbrymn"]
 friends[2]=["softwaredoug"]
 groupedUsers = mingl.GroupedUsers(friends)
-friends = m.get_mutual_friends(groupedUsers,limit=100,min_num_mutual_friends=2)
+friends = m.get_friends(groupedUsers,limit=100,min_num_mutual_friends=2)
 assert len(friends[2]) > 0
 assert isinstance(friends,mingl.GroupedUsers)
 

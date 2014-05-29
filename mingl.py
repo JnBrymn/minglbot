@@ -1,16 +1,25 @@
 #TODOs
-#all friend getters multidirectional (e.g. friend or follow)
-## _get_friends_from_twitter
-## get_mutual_friends
+#Why doesn't the bot agree with this: match (u:User)-->(v)
+#  where u.screen_name in ['preetamjinka', 'superninjarobot', 'pfreez', 'meekohi', 'o3design', 'coshx', 'beingspencer', 'jnbrymn', 'cl4rk3', 'capehart', 'metasim', 'gburnett_dba']
+#  return v.screen_name,count(*)
+#  order by count(*) desc
+# 
+#  @gburnett_dba @cl4rk3 @capehart @OicheShamhnaCat @dplepage @whit_hunter @harpertrow @metasim @thefoodgeek @asallans @d_a_l_l
+# 
+#remove input limits on get_friends nad hydrate so tht we can do large numbers
 #make "in between" function to find popular users U s.t. A-->U<--B
 #make the hydration preserve the ordering and grouping
-#make log messages be code that you can copy and paste and run
+#logging
+    #get timestampes in loging
+    #turn off neo4jlogging
+    #change "root" to "mingl" or "bot"
+    #make log messages be code that you can copy and paste and run
+#handle e[0][0]["code"] == 88 caused with network interruption
 #figure out why the uniqueness constraints aren't being set by default
 #handle users that don't allow their friends to be seen by marking them as friends_found_at - similarly for hydrated
 #?figure out why I'm haveing to double get friends to get them all (try running a get central nodes run and then do it again... it pulls in new friends... should be the same)
 #"figure out why I'm haveing to double hydrate long lists users that come back from get_mutual_friends. The first hydrate doesn't get them all.
 #encapsulate the graphQueries and log them to a different file
-#turn off neo4jlogging
 #create warning if friends are too popular?
 #make an "introductions" query? really, you'd often want an introduction to the FOLLOWERS of some group if you're recruiting
 ##introduction should also take into account if they're already following you. You also need to know why someone should follow you
@@ -32,6 +41,7 @@ class User(object):
         self.created_at = None
         self.hydrated_at = None
         self.friends_found_at = None
+        self.followers_found_at = None
         self._properties = {}
         if isinstance(user,int):
             self.id = user
@@ -55,6 +65,8 @@ class User(object):
                 self.hydrated_at = user["hydrated_at"]
             if "friends_found_at" in user:
                 self.friends_found_at = user["friends_found_at"]
+            if "followers_found_at" in user:
+                self.followers_found_at = user["followers_found_at"]
             self._properties = user
         elif isinstance(user,User):
             raise NotImplementedError()
@@ -142,11 +154,15 @@ class Mingl(object):
                 if e.reason == "Not authorized.":
                     logging.info("Not authorized.") #TODO return errors when necessary
                     return [] #TODO is empty array the correct thing to return?
-                elif e[0][0]["code"] == 88:
+                elif e.reason == "Failed to send request: [Errno 50] Network is down":
+                    logging.info("Network failure. Sleeping a bit and then retrying.")
+                    time.sleep(retrySeconds)
+                elif isinstance(e.message,list) and e[0][0]["code"] == 88:
                     logging.info("Rate limit exceeded. Sleeping")
                     time.sleep(retrySeconds)
                 else:
-                    logging.error("Unexpected error: %s",e)
+                    logging.error("Unexpected error: %s",e.reason)
+                    import pdb;pdb.set_trace()
                     raise e
 
     def __init__(self,
@@ -320,16 +336,29 @@ class Mingl(object):
 
         return hydrated_users
 
-    def _get_friends_from_twitter(self,user,return_users=True):
-        logging.info("Getting friends of %s from Twitter",user)
+    def _get_relations_from_twitter(self,
+            user,
+            direction, #can be friends or followers
+            return_users=True):
+        logging.info("Getting {direction} of {user} from Twitter".format(direction=direction,user=user))
+        
+        if direction == "friends":
+            arrow = "-[:FOLLOWS]->"
+            method = self.twitter.friends_ids
+        elif direction == "followers":
+            arrow = "<-[:FOLLOWS]-"
+            method = self.twitter.followers_ids
+        else:
+            raise Exception("direction must be one of \"friends\" or \"followers\"")
+    
         ids = []
         query = ""
         if isinstance(user,int):
-            ids = Mingl.twitter_exception_handling_runner(self.twitter.friends_ids,user_id=user,count=5000)
+            ids = Mingl.twitter_exception_handling_runner(method,user_id=user,count=5000)
             query += "MERGE (a:User {id:{id}})"
         elif isinstance(user,basestring):
             user = user.lower()
-            ids = Mingl.twitter_exception_handling_runner(self.twitter.friends_ids,screen_name=user,count=5000)
+            ids = Mingl.twitter_exception_handling_runner(method,screen_name=user,count=5000)
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
             err_msg = "user must be either integer for id, string for screen_name. Found %s" % str(user)
@@ -338,14 +367,14 @@ class Mingl(object):
         query += """
             ON CREATE SET
               a.created_at = timestamp()
-            SET a.friends_found_at = timestamp()
-            FOREACH (id IN {ids} |
-              MERGE (b:User {id:id})
+            SET a.{direction}_found_at = timestamp()
+            FOREACH (id IN {{ids}} |
+              MERGE (b:User {{id:id}})
               ON CREATE SET
                 b.created_at = timestamp()
-              CREATE UNIQUE (a)-[:FOLLOWS]->(b)
+              CREATE UNIQUE (a){arrow}(b)
             )
-        """
+        """.format(direction=direction,arrow=arrow)
         neo4j.CypherQuery(self.graph,query).run(id=user,screen_name=user,ids=ids)
 
         if return_users:
@@ -356,31 +385,39 @@ class Mingl(object):
                 users.append(user)
             return users
 
-    def get_mutual_friends(self,
+    def get_relations(self,
             users,
+            direction, #can be friends or followers
             num_to_use=float("inf"),
             limit=100,
-            min_num_mutual_friends=1
+            min_num_mutual_relations=1
             ):
-        """Retrieve mutual friends.
+        """Retrieve relations.
 
         Keyword arguments:
         num_to_use -- issues query based only upon the first num_to_use users (default inf)
-        limit -- the number of friends to return (default 100)
-        min_num_mutual_friends -- all users returned must be mutual friends of this number of input friends (defaul 1)
+        limit -- the number of relations to return (default 100)
+        min_num_mutual_relations -- all users returned must be mutual relations of this number of input relations (defaul 1)
         """
+
+        if direction == "friends":
+            arrow = "-[:FOLLOWS]->"
+        elif direction == "followers":
+            arrow = "<-[:FOLLOWS]-"
+        else:
+            raise Exception("direction must be one of \"friends\" or \"followers\"")
+
         input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
         screen_names = input["screen_names"]
         for the_user in input["users"]:
-            #TODO make this method more efficient by not adding ids for users with friends_found_at
             if the_user.id:
                 ids.append(the_user.id)
             else:
                 screen_names.append(the_user.screen_name)
-        logging.info("Getting mutual friends. ids:(%s) screen_names:(%s)",ids,screen_names)
+        logging.info("Getting {direction}. ids:({ids}) screen_names:({screen_names})".format(direction=direction,ids=ids,screen_names=screen_names))
 
-        #First, get list of users for whom friends have not been retrieved
+        #First, get list of users for whom relations have not been retrieved
         if screen_names:
             screen_names = [screen_name.lower() for screen_name in screen_names]
         all_ids = copy.copy(ids)
@@ -393,7 +430,7 @@ class Mingl(object):
         """
         for u in neo4j.CypherQuery(self.graph,getUsersQuery).execute(ids=ids,screen_names=screen_names):
             user = u.values[0]
-            if user["friends_found_at"]:
+            if user[direction+"_found_at"]:
                 if user["id"] and (user["id"] in ids):
                     ids.remove(user["id"])
                 if user["screen_name"]:
@@ -403,27 +440,42 @@ class Mingl(object):
         #Load these users into neo4j
         ids.extend(screen_names)
         for id in ids:
-            self._get_friends_from_twitter(id,return_users=False)
+            self._get_relations_from_twitter(id, direction=direction, return_users=False)
 
-        #Retrieve list of mutual friends sorted by number of mutual friendships
+        #Retrieve list of mutual relations sorted by number of mutual relationships
         query = """
-            MATCH (u:User)-[:FOLLOWS]->(f:User)
-            WHERE u.screen_name in {screen_names}
-               OR u.id in {ids}
+            MATCH (u:User){arrow}(f:User)
+            WHERE u.screen_name in {{screen_names}}
+               OR u.id in {{ids}}
             WITH count(*) AS c,f
             ORDER BY c desc
-            LIMIT {limit}
-            WHERE c >= {min_num_mutual_friends}
+            LIMIT {{limit}}
+            WHERE c >= {{min_num_mutual_relations}}
             RETURN c, f
-        """
+        """.format(arrow=arrow)
         results = neo4j.CypherQuery(self.graph,query).execute(
             ids=all_ids,
             screen_names=all_screen_names,
             limit=limit,
-            min_num_mutual_friends=min_num_mutual_friends
+            min_num_mutual_relations=min_num_mutual_relations
         )
-        friends = defaultdict(list)
+        relations = defaultdict(list)
         for r in results:
-            friends[r.values[0]].append(User(r.values[1].get_properties()))
-        return GroupedUsers(friends)
+            relations[r.values[0]].append(User(r.values[1].get_properties()))
+        return GroupedUsers(relations)
 
+    def get_friends(self,
+            users,
+            num_to_use=float("inf"),
+            limit=100,
+            min_num_mutual_friends=1
+            ):
+        return self.get_relations(users,"friends",num_to_use,limit,min_num_mutual_friends)
+
+    def get_followers(self,
+            users,
+            num_to_use=float("inf"),
+            limit=100,
+            min_num_mutual_followers=1
+            ):
+        return self.get_relations(users,"followers",num_to_use,limit,min_num_mutual_followers)
