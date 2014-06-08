@@ -1,35 +1,4 @@
 #TODOs
-#Why doesn't the bot agree with this: match (u:User)-->(v)
-#  where u.screen_name in ['preetamjinka', 'superninjarobot', 'pfreez', 'meekohi', 'o3design', 'coshx', 'beingspencer', 'jnbrymn', 'cl4rk3', 'capehart', 'metasim', 'gburnett_dba']
-#  return v.screen_name,count(*)
-#  order by count(*) desc
-# 
-#  @gburnett_dba @cl4rk3 @capehart @OicheShamhnaCat @dplepage @whit_hunter @harpertrow @metasim @thefoodgeek @asallans @d_a_l_l
-# 
-#remove input limits on get_friends nad hydrate so tht we can do large numbers
-#make "in between" function to find popular users U s.t. A-->U<--B
-#make the hydration preserve the ordering and grouping
-#logging
-    #get timestampes in loging
-    #turn off neo4jlogging
-    #change "root" to "mingl" or "bot"
-    #make log messages be code that you can copy and paste and run
-#handle e[0][0]["code"] == 88 caused with network interruption
-#figure out why the uniqueness constraints aren't being set by default
-#handle users that don't allow their friends to be seen by marking them as friends_found_at - similarly for hydrated
-#?figure out why I'm haveing to double get friends to get them all (try running a get central nodes run and then do it again... it pulls in new friends... should be the same)
-#"figure out why I'm haveing to double hydrate long lists users that come back from get_mutual_friends. The first hydrate doesn't get them all.
-#encapsulate the graphQueries and log them to a different file
-#create warning if friends are too popular?
-#make an "introductions" query? really, you'd often want an introduction to the FOLLOWERS of some group if you're recruiting
-##introduction should also take into account if they're already following you. You also need to know why someone should follow you
-#make twitter and graph private and make all *_at attributes @properties
-#handle nonexistant (friends and hydration)
-#figure out what to do with other API tokens - this can be used to greatly increase my throughput
-#guard against "could not authenticate" code 32
-#guard against "deadlock" if using more than one process that talks to neo4
-#add a real testing environment
-
 import os
 import logging #see http://docs.python.org/2/howto/logging
 logging.basicConfig(filename="mingl.log",level=logging.INFO)
@@ -479,3 +448,4 @@ class Mingl(object):
             min_num_mutual_followers=1
             ):
         return self.get_relations(users,"followers",num_to_use,limit,min_num_mutual_followers)
+
