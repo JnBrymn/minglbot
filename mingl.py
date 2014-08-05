@@ -114,7 +114,7 @@ class Mingl(object):
         return d
 
     @classmethod
-    def twitter_exception_handling_runner(cls,func,**args):
+    def _twitter_exception_handling_runner(cls,func,**args):
         retrySeconds = 60*5
         while True:
             try:
@@ -183,7 +183,7 @@ class Mingl(object):
         twitter_users = []
         if (ids and len(ids)>0) or (screen_names and len(screen_names)>0) :
             logging.info("Hydrating ids from Twitter. ids:(%s) screen_names:(%s) from Twitter",ids,screen_names)
-            twitter_users = Mingl.twitter_exception_handling_runner(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
+            twitter_users = Mingl._twitter_exception_handling_runner(self.twitter.lookup_users, user_ids=ids, screen_names=screen_names)
         else:
             return []
         users = []
@@ -305,9 +305,11 @@ class Mingl(object):
 
         return hydrated_users
 
+    max_users_retrieved = 5000
     def _get_relations_from_twitter(self,
             user,
-            direction, #can be friends or followers
+            direction, #can be "friends" or "followers"
+            count=max_users_retrieved, #the current max retrieved by one request 
             return_users=True):
         logging.info("Getting {direction} of {user} from Twitter".format(direction=direction,user=user))
         
@@ -323,11 +325,11 @@ class Mingl(object):
         ids = []
         query = ""
         if isinstance(user,int):
-            ids = Mingl.twitter_exception_handling_runner(method,user_id=user,count=5000)
+            ids = Mingl._twitter_exception_handling_runner(method,user_id=user,count=count)
             query += "MERGE (a:User {id:{id}})"
         elif isinstance(user,basestring):
             user = user.lower()
-            ids = Mingl.twitter_exception_handling_runner(method,screen_name=user,count=5000)
+            ids = Mingl._twitter_exception_handling_runner(method,screen_name=user,count=count)
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
             err_msg = "user must be either integer for id, string for screen_name. Found %s" % str(user)
@@ -354,6 +356,50 @@ class Mingl(object):
                 users.append(user)
             return users
 
+    def _insert_into_graph_if_not_present(self,ids,screen_names,direction):
+        """Adds nodes for ids and screen_names if they aren't already present.
+
+        Keyword arguments:
+        ids -- twitter user id numbers
+        screen_names -- twitter screen screen_names
+        direction -- either "friends" or "followers"
+        """
+
+        if direction == "friends":
+            arrow = "-[:FOLLOWS]->"
+        elif direction == "followers":
+            arrow = "<-[:FOLLOWS]-"
+        else:
+            raise Exception("direction must be one of \"friends\" or \"followers\"")
+
+        logging.info("Getting {direction}. ids:({ids}) screen_names:({screen_names})".format(direction=direction,ids=ids,screen_names=screen_names))
+
+        #First, get list of users for whom relations have not been retrieved
+        if screen_names:
+            screen_names = [screen_name.lower() for screen_name in screen_names]
+        ids_copy = copy.copy(ids)
+        screen_names_copy = copy.copy(screen_names)
+        getUsersQuery = """
+            MATCH (u:User)
+            WHERE u.id in {ids} 
+             OR u.screen_name in {screen_names}
+            RETURN u
+        """
+        for u in neo4j.CypherQuery(self.graph,getUsersQuery).execute(ids=ids_copy,screen_names=screen_names_copy):
+            user = u.values[0]
+            if user[direction+"_found_at"]:
+                if user["id"] and (user["id"] in ids_copy):
+                    ids_copy.remove(user["id"])
+                if user["screen_name"]:
+                    screen_name = user["screen_name"].lower()
+                    if screen_name in screen_names_copy: screen_names_copy.remove(screen_name)
+
+        #Load missing users into neo4j from twitter
+        ids_copy.extend(screen_names_copy)
+        for id in ids_copy:
+            self._get_relations_from_twitter(id, direction=direction, return_users=False)
+
+
     def get_relations(self,
             users,
             direction, #can be friends or followers
@@ -366,15 +412,8 @@ class Mingl(object):
         Keyword arguments:
         num_to_use -- issues query based only upon the first num_to_use users (default inf)
         limit -- the number of relations to return (default 100)
-        min_num_mutual_relations -- all users returned must be mutual relations of this number of input relations (defaul 1)
+        min_num_mutual_relations -- all users returned must be mutual relations of this number of input relations (default 1)
         """
-
-        if direction == "friends":
-            arrow = "-[:FOLLOWS]->"
-        elif direction == "followers":
-            arrow = "<-[:FOLLOWS]-"
-        else:
-            raise Exception("direction must be one of \"friends\" or \"followers\"")
 
         input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
         ids = input["ids"]
@@ -384,32 +423,15 @@ class Mingl(object):
                 ids.append(the_user.id)
             else:
                 screen_names.append(the_user.screen_name)
-        logging.info("Getting {direction}. ids:({ids}) screen_names:({screen_names})".format(direction=direction,ids=ids,screen_names=screen_names))
 
-        #First, get list of users for whom relations have not been retrieved
-        if screen_names:
-            screen_names = [screen_name.lower() for screen_name in screen_names]
-        all_ids = copy.copy(ids)
-        all_screen_names = copy.copy(screen_names)
-        getUsersQuery = """
-            MATCH (u:User)
-            WHERE u.id in {ids} 
-             OR u.screen_name in {screen_names}
-            RETURN u
-        """
-        for u in neo4j.CypherQuery(self.graph,getUsersQuery).execute(ids=ids,screen_names=screen_names):
-            user = u.values[0]
-            if user[direction+"_found_at"]:
-                if user["id"] and (user["id"] in ids):
-                    ids.remove(user["id"])
-                if user["screen_name"]:
-                    screen_name = user["screen_name"].lower()
-                    if screen_name in screen_names: screen_names.remove(screen_name)
+        if direction == "friends":
+            arrow = "-[:FOLLOWS]->"
+        elif direction == "followers":
+            arrow = "<-[:FOLLOWS]-"
+        else:
+            raise Exception("direction must be one of \"friends\" or \"followers\"")
 
-        #Load these users into neo4j
-        ids.extend(screen_names)
-        for id in ids:
-            self._get_relations_from_twitter(id, direction=direction, return_users=False)
+        self._insert_into_graph_if_not_present(ids,screen_names,direction)
 
         #Retrieve list of mutual relations sorted by number of mutual relationships
         query = """
@@ -423,8 +445,8 @@ class Mingl(object):
             RETURN c, f
         """.format(arrow=arrow)
         results = neo4j.CypherQuery(self.graph,query).execute(
-            ids=all_ids,
-            screen_names=all_screen_names,
+            ids=ids,
+            screen_names=screen_names,
             limit=limit,
             min_num_mutual_relations=min_num_mutual_relations
         )
@@ -449,3 +471,59 @@ class Mingl(object):
             ):
         return self.get_relations(users,"followers",num_to_use,limit,min_num_mutual_followers)
 
+    # def get_two_sided_relations(self,
+    #         users_1,
+    #         direction_1, #can be friends or followers
+    #         users_2,
+    #         direction_2, #can be friends or followers
+    #         num_to_use=float("inf"),
+    #         limit=100,
+    #         min_num_mutual_relations=1
+    #         ):
+    #     """Retrieve relations for two groups.
+
+    #     Keyword arguments:
+    #     num_to_use -- issues query based only upon the first num_to_use users (default inf)
+    #     limit -- the number of relations to return (default 100)
+    #     min_num_mutual_relations -- all users returned must be mutual relations of this number of input relations (default 1)
+    #     """
+
+    #     input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
+    #     ids = input["ids"]
+    #     screen_names = input["screen_names"]
+    #     for the_user in input["users"]:
+    #         if the_user.id:
+    #             ids.append(the_user.id)
+    #         else:
+    #             screen_names.append(the_user.screen_name)
+
+    #     if direction == "friends":
+    #         arrow = "-[:FOLLOWS]->"
+    #     elif direction == "followers":
+    #         arrow = "<-[:FOLLOWS]-"
+    #     else:
+    #         raise Exception("direction must be one of \"friends\" or \"followers\"")
+
+    #     self._insert_into_graph_if_not_present(ids,screen_names,direction)
+
+    #     #Retrieve list of mutual relations sorted by number of mutual relationships
+    #     query = """
+    #         MATCH (u:User){arrow}(f:User)
+    #         WHERE u.screen_name in {{screen_names}}
+    #            OR u.id in {{ids}}
+    #         WITH count(*) AS c,f
+    #         ORDER BY c desc
+    #         LIMIT {{limit}}
+    #         WHERE c >= {{min_num_mutual_relations}}
+    #         RETURN c, f
+    #     """.format(arrow=arrow)
+    #     results = neo4j.CypherQuery(self.graph,query).execute(
+    #         ids=ids,
+    #         screen_names=screen_names,
+    #         limit=limit,
+    #         min_num_mutual_relations=min_num_mutual_relations
+    #     )
+    #     relations = defaultdict(list)
+    #     for r in results:
+    #         relations[r.values[0]].append(User(r.values[1].get_properties()))
+    #     return GroupedUsers(relations)
