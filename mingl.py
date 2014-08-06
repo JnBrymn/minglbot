@@ -305,11 +305,11 @@ class Mingl(object):
 
         return hydrated_users
 
-    max_users_retrieved = 5000
+    max_users_retrieved = 5000 #the current max retrieved by one request 
     def _get_relations_from_twitter(self,
             user,
             direction, #can be "friends" or "followers"
-            count=max_users_retrieved, #the current max retrieved by one request 
+            count=max_users_retrieved, 
             return_users=True):
         logging.info("Getting {direction} of {user} from Twitter".format(direction=direction,user=user))
         
@@ -324,12 +324,25 @@ class Mingl(object):
     
         ids = []
         query = ""
+        cursor = -1
         if isinstance(user,int):
-            ids = Mingl._twitter_exception_handling_runner(method,user_id=user,count=count)
+            while len(ids) < count:
+                new_ids, cursors = Mingl._twitter_exception_handling_runner(method,user_id=user,cursor=cursor)
+                ids.extend(new_ids)
+                if cursors[1] == 0:
+                    break
+                else:
+                    cursor = cursors[1]
             query += "MERGE (a:User {id:{id}})"
         elif isinstance(user,basestring):
             user = user.lower()
-            ids = Mingl._twitter_exception_handling_runner(method,screen_name=user,count=count)
+            while len(ids) < count:
+                new_ids, cursors = Mingl._twitter_exception_handling_runner(method,screen_name=user,cursor=cursor)
+                ids.extend(new_ids)
+                if cursors[1] == 0:
+                    break
+                else:
+                    cursor = cursors[1]
             query += "MERGE (a:User {screen_name:{screen_name}})"
         else:
             err_msg = "user must be either integer for id, string for screen_name. Found %s" % str(user)
@@ -356,13 +369,14 @@ class Mingl(object):
                 users.append(user)
             return users
 
-    def _insert_into_graph_if_not_present(self,ids,screen_names,direction):
+    def _insert_into_graph_if_not_present(self,ids,screen_names,direction,count=max_users_retrieved):
         """Adds nodes for ids and screen_names if they aren't already present.
 
         Keyword arguments:
         ids -- twitter user id numbers
         screen_names -- twitter screen screen_names
         direction -- either "friends" or "followers"
+        count -- the number of users to retrieve from twitter (default 5000)
         """
 
         if direction == "friends":
@@ -397,7 +411,7 @@ class Mingl(object):
         #Load missing users into neo4j from twitter
         ids_copy.extend(screen_names_copy)
         for id in ids_copy:
-            self._get_relations_from_twitter(id, direction=direction, return_users=False)
+            self._get_relations_from_twitter(id, direction=direction, count=count, return_users=False)
 
 
     def get_relations(self,
@@ -405,6 +419,7 @@ class Mingl(object):
             direction, #can be friends or followers
             num_to_use=float("inf"),
             limit=100,
+            count_from_twitter=max_users_retrieved,
             min_num_mutual_relations=1
             ):
         """Retrieve relations.
@@ -412,6 +427,7 @@ class Mingl(object):
         Keyword arguments:
         num_to_use -- issues query based only upon the first num_to_use users (default inf)
         limit -- the number of relations to return (default 100)
+        count_from_twitter -- for each user who's relations are retrieved, how many users to retrieve from twitter (default 5000)
         min_num_mutual_relations -- all users returned must be mutual relations of this number of input relations (default 1)
         """
 
@@ -431,7 +447,7 @@ class Mingl(object):
         else:
             raise Exception("direction must be one of \"friends\" or \"followers\"")
 
-        self._insert_into_graph_if_not_present(ids,screen_names,direction)
+        self._insert_into_graph_if_not_present(ids,screen_names,direction,count_from_twitter)
 
         #Retrieve list of mutual relations sorted by number of mutual relationships
         query = """
@@ -459,17 +475,19 @@ class Mingl(object):
             users,
             num_to_use=float("inf"),
             limit=100,
+            count_from_twitter=max_users_retrieved, 
             min_num_mutual_friends=1
             ):
-        return self.get_relations(users,"friends",num_to_use,limit,min_num_mutual_friends)
+        return self.get_relations(users,"friends",num_to_use,limit,count_from_twitter,min_num_mutual_friends)
 
     def get_followers(self,
             users,
             num_to_use=float("inf"),
             limit=100,
+            count_from_twitter=max_users_retrieved,
             min_num_mutual_followers=1
             ):
-        return self.get_relations(users,"followers",num_to_use,limit,min_num_mutual_followers)
+        return self.get_relations(users,"followers",num_to_use,limit,count_from_twitter,min_num_mutual_followers)
 
     # def get_two_sided_relations(self,
     #         users_1,
