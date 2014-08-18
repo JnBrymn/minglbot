@@ -284,8 +284,8 @@ class Mingl(object):
 
         getUsersQuery = """
             MATCH (u:User)
-            WHERE u.id in {ids} 
-             OR u.screen_name in {screen_names}
+            WHERE u.id IN {ids} 
+             OR u.screen_name IN {screen_names}
             RETURN u
         """
         for u in neo4j.CypherQuery(self.graph,getUsersQuery).execute(ids=ids,screen_names=screen_names):
@@ -452,8 +452,8 @@ class Mingl(object):
         #Retrieve list of mutual relations sorted by number of mutual relationships
         query = """
             MATCH (u:User){arrow}(f:User)
-            WHERE u.screen_name in {{screen_names}}
-               OR u.id in {{ids}}
+            WHERE u.screen_name IN {{screen_names}}
+               OR u.id IN {{ids}}
             WITH count(*) AS c,f
             ORDER BY c desc
             LIMIT {{limit}}
@@ -489,59 +489,12 @@ class Mingl(object):
             ):
         return self.get_relations(users,"followers",num_to_use,limit,count_from_twitter,min_num_mutual_followers)
 
-    # def get_two_sided_relations(self,
-    #         users_1,
-    #         direction_1, #can be friends or followers
-    #         users_2,
-    #         direction_2, #can be friends or followers
-    #         num_to_use=float("inf"),
-    #         limit=100,
-    #         min_num_mutual_relations=1
-    #         ):
-    #     """Retrieve relations for two groups.
 
-    #     Keyword arguments:
-    #     num_to_use -- issues query based only upon the first num_to_use users (default inf)
-    #     limit -- the number of relations to return (default 100)
-    #     min_num_mutual_relations -- all users returned must be mutual relations of this number of input relations (default 1)
-    #     """
 
-    #     input = Mingl._split_up_input(users,{int:"ids",basestring:"screen_names",User:"users"},num_to_use=num_to_use)
-    #     ids = input["ids"]
-    #     screen_names = input["screen_names"]
-    #     for the_user in input["users"]:
-    #         if the_user.id:
-    #             ids.append(the_user.id)
-    #         else:
-    #             screen_names.append(the_user.screen_name)
 
-    #     if direction == "friends":
-    #         arrow = "-[:FOLLOWS]->"
-    #     elif direction == "followers":
-    #         arrow = "<-[:FOLLOWS]-"
-    #     else:
-    #         raise Exception("direction must be one of \"friends\" or \"followers\"")
 
-    #     self._insert_into_graph_if_not_present(ids,screen_names,direction)
 
-    #     #Retrieve list of mutual relations sorted by number of mutual relationships
-    #     query = """
-    #         MATCH (u:User){arrow}(f:User)
-    #         WHERE u.screen_name in {{screen_names}}
-    #            OR u.id in {{ids}}
-    #         WITH count(*) AS c,f
-    #         ORDER BY c desc
-    #         LIMIT {{limit}}
-    #         WHERE c >= {{min_num_mutual_relations}}
-    #         RETURN c, f
-    #     """.format(arrow=arrow)
-    #     results = neo4j.CypherQuery(self.graph,query).execute(
-    #         ids=ids,
-    #         screen_names=screen_names,
-    #         limit=limit,
-    #         min_num_mutual_relations=min_num_mutual_relations
-    #     )
-    #     relations = defaultdict(list)
-    #     for r in results:
-    #         relations[r.values[0]].append(User(r.values[1].get_properties()))
-    #     return GroupedUsers(relations)
+
+
+
+
