@@ -1,3 +1,6 @@
+from mingl import *
+import mingl
+
 ##AST validity tests
 
 #test FriendOf
@@ -152,3 +155,10 @@ assert sortedgroups(c._getFriendingUsers())==[['a', 'b']]
 assert sortedgroups(c._getFollowedUsers())==[["c","d","e","f","g"]]
 assert sortedgroups(c._getNotFriendingUsers())==[['h','i','j'],['k','l']]
 assert sortedgroups(c._getNotFollowedUsers())==[]
+
+## test query building
+import re
+assert re.sub("\s+",
+       " ",
+       mingl._build_user_retrieval_query(friendingUsers=[['a','b'],['c','d']],followedUsers=[['f','g'],['h','i']]),
+) == 'MATCH (x:User) WHERE x.screen_name IN ["a","b"] WITH collect(id(x)) AS fr0_id MATCH (x:User) WHERE x.screen_name IN ["c","d"] WITH fr0_id, collect(id(x)) AS fr1_id MATCH (x:User) WHERE x.screen_name IN ["f","g"] WITH fr0_id, fr1_id, collect(id(x)) AS fo0_id MATCH (x:User) WHERE x.screen_name IN ["h","i"] WITH fr0_id, fr1_id, fo0_id, collect(id(x)) AS fo1_id MATCH (fr0)-[:FOLLOWS]->(target), (fr1)-[:FOLLOWS]->(target), (target)-[:FOLLOWS]->(fo0), (target)-[:FOLLOWS]->(fo1) WHERE id(fr0) IN fr0_id AND id(fr1) IN fr1_id AND id(fo0) IN fo0_id AND id(fo1) IN fo1_id RETURN count(*) AS count, target ORDER BY count DESC LIMIT 1000;'

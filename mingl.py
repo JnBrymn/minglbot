@@ -255,7 +255,7 @@ class Mingl(object):
             users.append(User(u.get_properties()))
         return users
 
-    def hydrate_users(self,users,num_to_use=float("inf")):
+    def hydrate_users(self,users,num_to_use=100):
         """Populates all parameters of supplied users.
 
         Attempts to hydrate users from neo4j. If user is not present or if hydrated_at
@@ -422,7 +422,7 @@ class Mingl(object):
             count_from_twitter=max_users_retrieved,
             min_num_mutual_relations=1
             ):
-        """Retrieve relations.
+        """Retrieve relations. DEPRICATED
 
         Keyword arguments:
         num_to_use -- issues query based only upon the first num_to_use users (default inf)
@@ -478,7 +478,9 @@ class Mingl(object):
             count_from_twitter=max_users_retrieved, 
             min_num_mutual_friends=1
             ):
+        "depricated"
         return self.get_relations(users,"friends",num_to_use,limit,count_from_twitter,min_num_mutual_friends)
+
 
     def get_followers(self,
             users,
@@ -487,11 +489,255 @@ class Mingl(object):
             count_from_twitter=max_users_retrieved,
             min_num_mutual_followers=1
             ):
+        "depricated"
         return self.get_relations(users,"followers",num_to_use,limit,count_from_twitter,min_num_mutual_followers)
 
+#### NEW API BELOW 
+    def get_users(self,
+            where,
+            count_from_twitter=max_users_retrieved
+            ):
+        if not isinstance(where,_QueryNode):
+            raise "argument to get_users must be a _QueryNode specifying a query, or a string, or string array specifying screen_names"
+        #todo add limit parameter
+        #todo add possibility for just specifying a list of screen names
+        #  just wrap the screen names in an Among clause and send that to getUsers again
+
+        friendingUsers = where._getFriendingUsers()
+        followedUsers = where._getFollowedUsers()
+
+        #add users as necessary to the graph 
+        def get_user_set(groups):
+            allUsers = []
+            [allUsers.extend(group) for group in groups]
+            return list(set(allUsers))
+        allFriendingUsers = get_user_set(friendingUsers)
+        allFollowedUsers = get_user_set(followedUsers)
+        self._insert_into_graph_if_not_present([],allFriendingUsers,"friends",count_from_twitter)
+        self._insert_into_graph_if_not_present([],allFollowedUsers,"followers",count_from_twitter)
+
+        #make query
+        #TODO add to arguments count_from_twitter=max_users_retrieved, min_num_mutual_relations=1
+        #     add to cypher query
+        #       LIMIT {{limit}}
+        #       WHERE c >= {{min_num_mutual_relations}}
+        #       RETURN c, f
+        query = _build_user_retrieval_query(friendingUsers=friendingUsers,followedUsers=followedUsers)
+        results = neo4j.CypherQuery(self.graph,query).execute()
+        relations = defaultdict(list)
+        for r in results:
+            relations[r.values[0]].append(User(r.values[1].get_properties()))
+        relations = GroupedUsers(relations)
+
+        #hydrate the users 
+        #TODO this is riduculous sloppy code - fix it https://github.com/JnBrymn/minglbot/issues/32
+        self.hydrate_users(relations)
+        query = _build_user_retrieval_query(friendingUsers=friendingUsers,followedUsers=followedUsers)
+        results = neo4j.CypherQuery(self.graph,query).execute()
+        relations = defaultdict(list)
+        for r in results:
+            relations[r.values[0]].append(User(r.values[1].get_properties()))
+        relations = GroupedUsers(relations)
+        return relations
 
 
 
+## QUERY NODES
+
+class _QueryNode(object):
+    def __init__(self,*subnodes):
+        for subnode in subnodes:
+            if not isinstance(subnode,_QueryNode):
+                raise Exception("And clauses can only contain _QueryNodes")
+        self._subnodes=subnodes
+
+    #typically inheriting classes will override these methods, often with recursive calls to subnodes
+    def _getFriendingUsers(self):
+        return []
+    def _getFollowedUsers(self):
+        return []
+    def _getNotFriendingUsers(self):
+        return []
+    def _getNotFollowedUsers(self):
+        return []
+
+class And(_QueryNode):
+    def __init__(self,*subnodes):
+        if len(subnodes) < 2:
+            raise Exception("must supply at least 2 clauses to And")
+        for subnode in subnodes:
+            if isinstance(subnode,And):
+                raise Exception("And clauses can not contain And clauses")
+            elif not isinstance(subnode,_QueryNode):
+                raise Exception("And clauses can only contain _QueryNodes")
+        super(And, self).__init__(*subnodes)
+        
+    def _getFriendingUsers(self):
+        friendingUsers = []
+        for subNode in self._subnodes:
+            subFriendingUsers = subNode._getFriendingUsers()
+            if len(subFriendingUsers)>0:
+                friendingUsers.extend(subFriendingUsers)
+        return friendingUsers
+
+    def _getFollowedUsers(self):
+        followedUsers = []
+        for subNode in self._subnodes:
+            subFollowedUsers = subNode._getFollowedUsers()
+            if len(subFollowedUsers)>0:
+                followedUsers.extend(subFollowedUsers)
+        return followedUsers
+    
+    def _getNotFriendingUsers(self):
+        notFriendingUsers = []
+        for subNode in self._subnodes:
+            subNotFriendingUsers = subNode._getNotFriendingUsers()
+            if len(subNotFriendingUsers)>0:
+                notFriendingUsers.extend(subNotFriendingUsers)
+        return notFriendingUsers
+
+    def _getNotFollowedUsers(self):
+        notFollowedUsers = []
+        for subNode in self._subnodes:
+            subNotFollowedUsers = subNode._getNotFollowedUsers()
+            if len(subNotFollowedUsers)>0:
+                notFollowedUsers.extend(subNotFollowedUsers)
+        return notFollowedUsers
+
+        
+class Or(_QueryNode):
+    def __init__(self,*subnodes):
+        if len(subnodes) < 2:
+            raise Exception("must supply at least 2 clauses to Or")
+        kind = type(subnodes[0])
+        for subnode in subnodes:
+            if not isinstance(subnode,(FriendOf,FollowerOf)):
+                raise Exception("Or clauses can only contain FriendOf or FollowerOf clauses")
+            if not isinstance(subnode,kind):
+                raise Exception("Or must contain clauses of the SAME type: either FriendOf or FollowerOf")
+        super(Or, self).__init__(*subnodes)
+    
+    def _getFriendingUsers(self):
+        friendingUsers = []
+        for subnode in self._subnodes:
+            subFriendingUsers = subnode._getFriendingUsers()
+            if len(subFriendingUsers):
+                friendingUsers.extend(subFriendingUsers[0])
+        if len(friendingUsers) > 0:
+            return [list(set(friendingUsers))]
+        else:
+            return []
+    
+    def _getFollowedUsers(self):
+        followedUsers = []
+        for subnode in self._subnodes:
+            subFollowedUsers = subnode._getFollowedUsers()
+            if len(subFollowedUsers):
+                followedUsers.extend(subFollowedUsers[0])
+        if len(followedUsers) > 0:
+            return [list(set(followedUsers))]
+        else:
+            return []
+
+
+class FriendOf(_QueryNode):
+    def __init__(self,*friendingUsers):
+        if len(friendingUsers) < 1:
+            raise Exception("at least 1 screen name must be specified to FriendOf")
+        for user in friendingUsers:
+            if not isinstance(user,basestring):
+                raise Exception("arguments to FriendOf must be strings")
+        self._friendingUsers = list(friendingUsers)
+        super(FriendOf, self).__init__()
+
+    def _getFriendingUsers(self):
+        return [list(set(self._friendingUsers))]
+    
+    
+class FollowerOf(_QueryNode):
+    def __init__(self,*followedUsers):
+        if len(followedUsers) < 1:
+            raise Exception("at least 1 screen name must be specified to FollowerOf")
+        for user in followedUsers:
+            if not isinstance(user,basestring):
+                raise Exception("arguments to FollowerOf must be strings")
+        self._followedUsers = list(followedUsers)
+        super(FollowerOf, self).__init__()
+
+    def _getFollowedUsers(self):
+        return [list(set(self._followedUsers))]
+
+class Not(_QueryNode):
+    def __init__(self,subnode):
+        print ("Not is implemented correctly but doesn't have support in the cypher creation of get_users\n"
+               "see https://github.com/JnBrymn/minglbot/issues/26")
+               
+        if not isinstance(subnode,(FriendOf,FollowerOf,Or)):
+            raise Exception("Not can only contain FriendOf, FollowerOf, or Or clauses")
+        super(Not, self).__init__(subnode)
+    def _getNotFriendingUsers(self):
+        return self._subnodes[0]._getFriendingUsers()
+    def _getNotFollowedUsers(self):
+        return self._subnodes[0]._getFollowedUsers()
+
+class Among(_QueryNode):
+    def __init__(self,*users):
+        raise Exception("not implemented")
+        #Among can be used in Or
+        #Among can be used in Not
+        #_getAmongUsers and _getNotAmongUsers must be added
+        #Only a single Among or NotAmong group can exist at the top level
+        #The Among and NotAmong can be merged a shorter Among list
+        
+
+import re
+screen_name_re = re.compile(r"^\w+$")
+def _escape_user_list(users):
+    return '["'+ '","'.join([user.lower() for user in users if screen_name_re.match(user)]) +'"]'
+    
+def _build_user_retrieval_query(friendingUsers=[],followedUsers=[]):
+    
+    #to keep me from fat fingering a mistake later
+    fr = "fr"
+    fo = "fo"
+    nfr = "nfr"
+    nfo = "nfo"
+    
+    d={'cypher1':[],'cypher2':[],'group_ids':[]} #this is used to make a modifiable closure variable
+        
+    #build and run the query
+    def make_group_match_cypher(groups,group_id_prefix):
+        for i,group in enumerate(groups):
+            group_id = group_id_prefix+str(i)+"_id"
+            user_list = _escape_user_list(group)
+            group_ids_str = ", ".join(d['group_ids']) + ", " if len(d['group_ids']) > 0 else ""
+            d['cypher1'].append(("MATCH (x:User) WHERE x.screen_name IN {user_list}\n"
+                           "  WITH {group_ids_str}collect(id(x)) AS {group_id}"
+                           ).format(user_list=user_list,group_ids_str =group_ids_str,group_id=group_id))
+            d['group_ids'].append(group_id)
+            d['cypher2'].append("id({0}) IN {1}".format(group_id_prefix+str(i),group_id))
+                
+    make_group_match_cypher(friendingUsers,fr)
+    make_group_match_cypher(followedUsers,fo)
+    
+    query = "\n\n".join(d['cypher1'])
+    query += "\n\nMATCH\n"
+    cypher_clauses = []
+    for i,group in enumerate(friendingUsers):
+        group_id = fr+str(i)
+        cypher_clauses.append("  ({group_id})-[:FOLLOWS]->(target)".format(group_id=group_id))
+    for i,group in enumerate(followedUsers):
+        group_id = fo+str(i)
+        cypher_clauses.append("  (target)-[:FOLLOWS]->({group_id})".format(group_id=group_id))
+    query += ",\n".join(cypher_clauses)
+    query += "\nWHERE\n      "
+    query += "\n  AND ".join(d['cypher2'])
+    query += ("\nRETURN count(*) AS count, target\n"
+                "ORDER BY count DESC\n"
+                "LIMIT 1000;"
+            )
+    
+    return query
 
 
 

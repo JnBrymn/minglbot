@@ -14,6 +14,7 @@ other information
 * response_history.txt tracks the messages that
 * bot.py - listens to a twitter account and makes tweets
 * see issues on github
+* tests: get_user_test.py mingl_test.py 
 
 
 typical usage
